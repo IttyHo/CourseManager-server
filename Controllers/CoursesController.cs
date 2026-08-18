@@ -1,73 +1,107 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using CourseManager.Api.Contracts.Courses;
 using CourseManager.Api.Data;
 using CourseManager.Api.Models;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace CourseManager.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class CoursesController : ControllerBase
+public sealed class CoursesController : ControllerBase
 {
     private readonly AppDbContext _context;
 
-    public CoursesController(AppDbContext context)
-    {
-        _context = context;
-    }
+    public CoursesController(AppDbContext context) => _context = context;
 
-    // GET: api/courses
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Course>>> GetAll()
+    [ProducesResponseType<IReadOnlyList<CourseResponse>>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<CourseResponse>>> GetAll(CancellationToken cancellationToken)
     {
-        return await _context.Courses.ToListAsync();
+        var courses = await _context.Courses
+            .AsNoTracking()
+            .OrderBy(course => course.Name)
+            .Select(course => ToResponse(course))
+            .ToListAsync(cancellationToken);
+
+        return Ok(courses);
     }
 
-    // GET: api/courses/5
-    [HttpGet("{id}")]
-    public async Task<ActionResult<Course>> GetById(int id)
+    [HttpGet("{id:int}")]
+    [ProducesResponseType<CourseResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<CourseResponse>> GetById(int id, CancellationToken cancellationToken)
     {
-        var course = await _context.Courses.FindAsync(id);
-        if (course == null)
-            return NotFound();
+        var course = await _context.Courses
+            .AsNoTracking()
+            .FirstOrDefaultAsync(course => course.Id == id, cancellationToken);
 
-        return course;
+        return course is null ? NotFound() : Ok(ToResponse(course));
     }
 
-    // POST: api/courses
     [HttpPost]
-    public async Task<ActionResult<Course>> Create(Course course)
+    [ProducesResponseType<CourseResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<CourseResponse>> Create(
+        CreateCourseRequest request,
+        CancellationToken cancellationToken)
     {
-        _context.Courses.Add(course);
-        await _context.SaveChangesAsync();
+        var course = new Course
+        {
+            Name = request.Name.Trim(),
+            Description = request.Description.Trim(),
+            DurationHours = request.DurationHours
+        };
 
-        return CreatedAtAction(nameof(GetById), new { id = course.Id }, course);
+        _context.Courses.Add(course);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        var response = ToResponse(course);
+        return CreatedAtAction(nameof(GetById), new { id = course.Id }, response);
     }
 
-    // PUT: api/courses/5
-    [HttpPut("{id}")]
-    public async Task<IActionResult> Update(int id, Course updated)
+    [HttpPut("{id:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Update(
+        int id,
+        UpdateCourseRequest request,
+        CancellationToken cancellationToken)
     {
-        if (id != updated.Id)
-            return BadRequest();
+        var course = await _context.Courses.FindAsync([id], cancellationToken);
+        if (course is null)
+        {
+            return NotFound();
+        }
 
-        _context.Entry(updated).State = EntityState.Modified;
-        await _context.SaveChangesAsync();
+        course.Name = request.Name.Trim();
+        course.Description = request.Description.Trim();
+        course.DurationHours = request.DurationHours;
 
+        await _context.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
 
-    // DELETE: api/courses/5
-    [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(int id)
+    [HttpDelete("{id:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
     {
-        var course = await _context.Courses.FindAsync(id);
-        if (course == null)
+        var course = await _context.Courses.FindAsync([id], cancellationToken);
+        if (course is null)
+        {
             return NotFound();
+        }
 
         _context.Courses.Remove(course);
-        await _context.SaveChangesAsync();
-
+        await _context.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
+
+    private static CourseResponse ToResponse(Course course) => new(
+        course.Id,
+        course.Name,
+        course.Description,
+        course.DurationHours,
+        course.CreatedAt);
 }
